@@ -35,6 +35,12 @@
         <item>Factory reset</item>
         <item>Set wireless zones</item>
         <item>Set wired zones</item>
+        <item>Set messages</item>
+        <item>Request settings</item>
+        <item>Request phones</item>
+        <item>Request messages</item>
+        <item>Request date/time/scheduler settings</item>
+        <item>Request zone settings</item>
     </string-array>
     <string-array name="disable_or_enable">
         <item>Disable</item>
@@ -49,6 +55,18 @@
         <item>Wireless zone#6</item>
     </string-array>
     <string-array name="wired_zone_num">
+        <item>Wired zone#7</item>
+        <item>Wired zone#8</item>
+        <item>Wired zone#9</item>
+        <item>Wired zone#10</item>
+    </string-array>
+    <string-array name="zone_num">
+        <item>Wireless zone#1</item>
+        <item>Wireless zone#2</item>
+        <item>Wireless zone#3</item>
+        <item>Wireless zone#4</item>
+        <item>Wireless zone#5</item>
+        <item>Wireless zone#6</item>
         <item>Wired zone#7</item>
         <item>Wired zone#8</item>
         <item>Wired zone#9</item>

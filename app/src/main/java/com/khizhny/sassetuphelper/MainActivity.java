@@ -1,15 +1,21 @@
 package com.khizhny.sassetuphelper;
 
+import android.Manifest;
+import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.net.Uri;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
+import android.security.KeyPairGeneratorSpec;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
 import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
+import android.telephony.SmsManager;
+import android.util.Base64;
+import android.util.Log;
 import android.view.View;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -18,9 +24,28 @@ import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
-public class MainActivity extends AppCompatActivity {
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.math.BigInteger;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.util.ArrayList;
+import java.util.Calendar;
 
+import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
+import javax.crypto.CipherOutputStream;
+import javax.security.auth.x500.X500Principal;
+
+public class MainActivity extends AppCompatActivity implements View.OnClickListener {
+
+    private static final int PERMISSION_REQUEST_CODE = 1;
+    private KeyStore keyStore;
     private TextView tvTip;
     private EditText etPin;
     private EditText etSimNumber;
@@ -36,6 +61,9 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvSensorType;
     private Spinner spChoices;
     private TextView tvChoices;
+    private EditText etText;
+    private TextView tvText;
+    private FloatingActionButton fab;
     ArrayAdapter<String> spChoicesArrayAdapter;
 
     private String parameterCode;
@@ -45,20 +73,120 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
-        settings.edit().putString("simPhoneNumber", etSimNumber.getText().toString()).apply();
+        settings.edit()
+                .putString("simPhoneNumber", etSimNumber.getText().toString())
+                .putString("pin",encryptString("pin",etPin.getText().toString()))
+                .apply();
         super.onStop();
+    }
+
+    public void makeKeysIfNeeded(String alias) {
+        try {
+            // Create new key if needed
+            if (!keyStore.containsAlias(alias)) {
+                Calendar start = Calendar.getInstance();
+                Calendar end = Calendar.getInstance();
+                end.add(Calendar.YEAR, 1);
+                KeyPairGeneratorSpec spec = new KeyPairGeneratorSpec.Builder(this)
+                        .setAlias(alias)
+                        .setSubject(new X500Principal("CN=Khizhny, O=Android Authority"))
+                        .setSerialNumber(BigInteger.ONE)
+                        .setStartDate(start.getTime())
+                        .setEndDate(end.getTime())
+                        .build();
+                KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA", "AndroidKeyStore");
+                generator.initialize(spec);
+
+                KeyPair keyPair= generator.generateKeyPair();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "Exception " + e.getMessage() + " occured", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    public String decryptString(String alias,String cipherText) {
+        try {
+            KeyStore.PrivateKeyEntry privateKeyEntry = (KeyStore.PrivateKeyEntry)keyStore.getEntry(alias, null);
+            RSAPrivateKey privateKey = (RSAPrivateKey) privateKeyEntry.getPrivateKey();
+
+            Cipher output = Cipher.getInstance("RSA/ECB/PKCS1Padding", "AndroidOpenSSL");
+            output.init(Cipher.DECRYPT_MODE, privateKey);
+
+            CipherInputStream cipherInputStream = new CipherInputStream(
+                    new ByteArrayInputStream(Base64.decode(cipherText, Base64.DEFAULT)), output);
+            ArrayList<Byte> values = new ArrayList<>();
+            int nextByte;
+
+            while ((nextByte = cipherInputStream.read()) != -1) {
+                values.add((byte)nextByte);
+            }
+
+            byte[] bytes = new byte[values.size()];
+            for(int i = 0; i < bytes.length; i++) {
+                bytes[i] = values.get(i).byteValue();
+            }
+
+           return new String(bytes, 0, bytes.length, "UTF-8");
+
+        } catch (Exception e) {
+            Toast.makeText(this, "Exception " + e.getMessage() + " occured", Toast.LENGTH_LONG).show();
+        }
+        return null;
+    }
+
+    public String encryptString(String alias, String initialText) {
+        try {
+            KeyStore.PrivateKeyEntry privateKeyEntry = (KeyStore.PrivateKeyEntry)keyStore.getEntry(alias, null);
+            RSAPublicKey publicKey = (RSAPublicKey) privateKeyEntry.getCertificate().getPublicKey();
+
+            // Encrypt the text
+            if(initialText.isEmpty()) {
+                Toast.makeText(this, "Enter text in the 'Initial Text' widget", Toast.LENGTH_LONG).show();
+                return null;
+            }
+
+            Cipher input = Cipher.getInstance("RSA/ECB/PKCS1Padding", "AndroidOpenSSL");
+            input.init(Cipher.ENCRYPT_MODE, publicKey);
+
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            CipherOutputStream cipherOutputStream = new CipherOutputStream(outputStream, input);
+            cipherOutputStream.write(initialText.getBytes("UTF-8"));
+            cipherOutputStream.close();
+
+            byte [] vals = outputStream.toByteArray();
+            return Base64.encodeToString(vals, Base64.DEFAULT);
+
+        } catch (Exception e) {
+            Toast.makeText(this, "Exception " + e.getMessage() + " occured", Toast.LENGTH_LONG).show();
+        }
+        return null;
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try {
+            keyStore = KeyStore.getInstance("AndroidKeyStore");
+            keyStore.load(null);
+            makeKeysIfNeeded("pin");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
         setContentView(R.layout.activity_main);
         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
         // Restoring preferences
-        simPhoneNumber= PreferenceManager.getDefaultSharedPreferences(this).getString("simPhoneNumber","80671234567");
+        simPhoneNumber = PreferenceManager.getDefaultSharedPreferences(this).getString("simPhoneNumber", "80671234567");
+        String encriptedPin = PreferenceManager.getDefaultSharedPreferences(this).getString("pin", "1234");
+        if (encriptedPin.equals("1234")){
+            pin = "1234";
+        }else{
+            pin = decryptString("pin", encriptedPin);
+        }
 
         // finding Views
+        fab = (FloatingActionButton) findViewById(R.id.fab);
         tvTip=(TextView)  findViewById(R.id.tvTIP);
         etPin=(EditText) findViewById(R.id.etPIN);
         etSimNumber=(EditText) findViewById(R.id.etSimNumber);
@@ -76,6 +204,8 @@ public class MainActivity extends AppCompatActivity {
         tvChoices=(TextView)  findViewById(R.id.tvChoices);
         spChoicesArrayAdapter= new ArrayAdapter<String>(this, R.layout.support_simple_spinner_dropdown_item);
         spChoices.setAdapter(spChoicesArrayAdapter);
+        tvText = (TextView)   findViewById(R.id.tvText);
+        etText = (EditText)   findViewById(R.id.etText);
 
         etPin.setText(pin);
         etSimNumber.setText(simPhoneNumber);
@@ -93,28 +223,12 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
+
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                // Check pin
-                String pin = etPin.getText().toString();
-                if (pin.length()!=4) {
-                    Snackbar.make(view, "Enter PIN code", Snackbar.LENGTH_LONG)
-                            .setAction("Action", null).show();
-                    return;
-                }
 
-                // Phone check
-                String simPhoneNumber=etSimNumber.getText().toString();
-                if (simPhoneNumber.length()<5) {
-                    Snackbar.make(view, "Enter phone number", Snackbar.LENGTH_LONG)
-                            .setAction("Action", null).show();
-                    return;
-                }
-
-                //Parameters check
-
+                int zoneCode;
                 String parameterValue="";
                 switch (spParameter.getSelectedItemPosition()){
                     case 0: //SMS sending
@@ -238,30 +352,46 @@ public class MainActivity extends AppCompatActivity {
                         break;
                     case 18: //Set wired zone type
                         parameterCode="61";
-                        int zoneCode=spChoices.getSelectedItemPosition()+7;
+                        zoneCode=spChoices.getSelectedItemPosition()+7;
                         if (zoneCode<10) parameterValue += "0";
                         parameterValue += zoneCode;  // Zone number [07-10]
                         parameterValue += 1+spZoneType.getSelectedItemPosition();
                         parameterValue += spEnableDisable.getSelectedItemPosition();
                         parameterValue += spSensorType.getSelectedItemPosition();
                         break;
+                    case 19://Set messages
+                        zoneCode=spChoices.getSelectedItemPosition()+1;
+                        if (zoneCode==10) {
+                            parameterCode="90";
+                        }else {
+                            parameterCode="8"+zoneCode;
+                        }
+                        if (etText.getText().toString().length()>12) {
+                            Snackbar.make(view, "Only 12 digits maximum", Snackbar.LENGTH_LONG)
+                                    .setAction("Action", null).show();
+                            return;
+                        }
+                        parameterValue = etText.getText().toString();
+                        break;
+                    case 20: //Request settings
+                        parameterCode="20";
+                        break;
+                    case 21: //Request phones
+                        parameterCode="21";
+                        break;
+                    case 22: //Request messages
+                        parameterCode="80";
+                        break;
+                    case 23: //Request date/time/scheduler
+                        parameterCode="22";
+                        break;
+                    case 24: //Request zone settings
+                        parameterCode="23";
+                        break;
                     default:
                         parameterCode="";
                 }
-                if (parameterCode=="") {
-                    Snackbar.make(view, "Select parameter", Snackbar.LENGTH_LONG)
-                            .setAction("Action", null).show();
-                    return;
-                }
-
-                // Mockup
-                //Snackbar.make(view, "Sending "+pin+parameterCode+parameterValue+"#", Snackbar.LENGTH_LONG).setAction("Action", null).show();
-
-                // Opening sms sending activity
-                Uri uri = Uri.parse("smsto:"+simPhoneNumber);
-                Intent it = new Intent(Intent.ACTION_SENDTO, uri);
-                it.putExtra("sms_body", pin+parameterCode+parameterValue+"#");
-                startActivity(it);
+                sendCommand(etSimNumber.getText().toString(),etPin.getText().toString(), parameterCode,parameterValue);
             }
         });
 
@@ -315,6 +445,9 @@ public class MainActivity extends AppCompatActivity {
         tvSensorType.setVisibility(View.GONE);
         spChoices.setVisibility(View.GONE);
         tvChoices.setVisibility(View.GONE);
+        tvText.setVisibility(View.GONE);
+        etText.setVisibility(View.GONE);
+
         switch (parameterIndex){
             case 0: //SMS sending
                 spEnableDisable.setVisibility(View.VISIBLE);
@@ -480,6 +613,29 @@ public class MainActivity extends AppCompatActivity {
 
                 tvTip.setText("Select the behavior of the system for each zone (wired sensor).");
                 break;
+            case 19://Set messages
+                tvText.setVisibility(View.VISIBLE);
+                etText.setVisibility(View.VISIBLE);
+                tvChoices.setVisibility(View.VISIBLE);
+                spChoices.setVisibility(View.VISIBLE);
+                tvChoices.setText("Zone number:");
+                spChoices.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, getResources().getStringArray(R.array.zone_num)));
+                break;
+            case 20: //Request settings
+                tvTip.setText("System will respond with message containing its setting(delays,volume,pass,etc.");
+                break;
+            case 21: //Request phones
+                tvTip.setText("System will respond with message containing its phone slots settings");
+                break;
+            case 22: //Request messages
+                tvTip.setText("System will respond with message containing message templates for all zones.");
+                break;
+            case 23: //Request date/time/scheduler
+                tvTip.setText("System will respond with message containing date, time and both scheduler rules.");
+                break;
+            case 24: //Request zone settings
+                tvTip.setText("System will respond with message containing current zone settings.");
+                break;
         }
     }
     private void showHintsDialog() {
@@ -487,4 +643,108 @@ public class MainActivity extends AppCompatActivity {
             builder.setMessage(getResources().getString(R.string.hint_text));
             builder.create().show();
     }
+
+    @Override
+    public void onClick(View v) {
+        switch (v.getId()){
+            case R.id.btnUnLock:
+                // Opening sms sending activity
+                sendCommand(etSimNumber.getText().toString(),etPin.getText().toString(),"0","");
+                break;
+            case R.id.btnLock:
+                // Opening sms sending activity
+               sendCommand(etSimNumber.getText().toString(),etPin.getText().toString(),"1","");
+                break;
+            case R.id.btnPartLock:
+                // Opening sms sending activity
+                sendCommand(etSimNumber.getText().toString(),etPin.getText().toString(),"2","");
+                break;
+            case R.id.btnFlashOn:
+                // Opening sms sending activity
+                sendCommand(etSimNumber.getText().toString(),etPin.getText().toString(),"3","");
+                break;
+            case R.id.btnFlashOff:
+                // Opening sms sending activity
+                sendCommand(etSimNumber.getText().toString(),etPin.getText().toString(),"4","");
+                break;
+            case R.id.btnPower:
+                // Opening sms sending activity
+                sendCommand(etSimNumber.getText().toString(),etPin.getText().toString(),"6","");
+                break;
+        }
+
+    }
+
+    private void sendCommand(String simPhoneNumber, String pin, String parameterCode, String parameterValue ){
+        // Check code
+        if (parameterCode.equals("")) {
+            Snackbar.make(fab, "Select parameter", Snackbar.LENGTH_LONG)
+                    .setAction("Action", null).show();
+            return;
+        }
+        // Check pin
+
+        if (pin.length()!=4) {
+            Snackbar.make(fab, "Enter PIN code", Snackbar.LENGTH_LONG)
+                    .setAction("Action", null).show();
+            return;
+        }
+
+        // Phone check
+        if (simPhoneNumber.length()<5) {
+            Snackbar.make(fab, "Enter phone number", Snackbar.LENGTH_LONG)
+                    .setAction("Action", null).show();
+            return;
+        }
+
+        // Mockup
+        Snackbar.make(fab, "Sending "+pin+parameterCode+parameterValue+"#", Snackbar.LENGTH_LONG).setAction("Action", null).show();
+
+
+        // Opening sms sending activity
+        /*Uri uri = Uri.parse("smsto:"+simPhoneNumber);
+        Intent it = new Intent(Intent.ACTION_SENDTO, uri);
+        it.putExtra("sms_body", pin+parameterCode+parameterValue+"#");
+        startActivity(it);/**/
+
+        // Check permissions
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+
+            if (checkSelfPermission(Manifest.permission.SEND_SMS)!= PackageManager.PERMISSION_GRANTED) {
+                Log.d("permission", "permission denied to SEND_SMS - requesting it");
+                String[] permissions = {Manifest.permission.SEND_SMS};
+                requestPermissions(permissions, PERMISSION_REQUEST_CODE);
+            }
+        }
+        sendSMS(simPhoneNumber,pin+parameterCode+parameterValue+"#");
+    }
+
+    /*
+     * BroadcastReceiver mBrSend; BroadcastReceiver mBrReceive;
+     */
+    private void sendSMS(String phoneNumber, String message) {
+        ArrayList<PendingIntent> sentPendingIntents = new ArrayList<PendingIntent>();
+        ArrayList<PendingIntent> deliveredPendingIntents = new ArrayList<PendingIntent>();
+        PendingIntent sentPI = PendingIntent.getBroadcast(this, 0,
+                new Intent(this, SmsSentReceiver.class), 0);
+        PendingIntent deliveredPI = PendingIntent.getBroadcast(this, 0,
+                new Intent(this, SmsDeliveredReceiver.class), 0);
+        try {
+            SmsManager sms = SmsManager.getDefault();
+            ArrayList<String> mSMSMessage = sms.divideMessage(message);
+            for (int i = 0; i < mSMSMessage.size(); i++) {
+                sentPendingIntents.add(i, sentPI);
+                deliveredPendingIntents.add(i, deliveredPI);
+            }
+            sms.sendMultipartTextMessage(phoneNumber, null, mSMSMessage,
+                    sentPendingIntents, deliveredPendingIntents);
+
+        } catch (Exception e) {
+            Snackbar.make(fab, "SMS sending failed...", Snackbar.LENGTH_LONG)
+                    .setAction("Action", null).show();
+            e.printStackTrace();
+        }
+
+    }
+
 }
